@@ -3,7 +3,7 @@
 # [tool.orcaslicer.plugin]
 # name = "Compact G-code Tools"
 # description = "Compacts used tool indices in the outgoing G-code working copy."
-# author = "OrcaSlicer community"
+# author = "Sims"
 # version = "1.0.1"
 # type = "slicing-pipeline"
 # ///
