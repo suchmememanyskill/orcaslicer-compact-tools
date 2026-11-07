@@ -12,7 +12,7 @@ orca.slicing = types.SimpleNamespace(SlicingPipelineCapabilityBase=object,
                                     Step=types.SimpleNamespace(psGCodePostProcess=1))
 orca.ExecutionResult = types.SimpleNamespace(success=lambda message='': message)
 sys.modules['orca'] = orca
-spec = importlib.util.spec_from_file_location('compact_tools', Path(__file__).with_name('compact_tools.py'))
+spec = importlib.util.spec_from_file_location('compact_tools', Path(__file__).resolve().parents[1] / 'plugin' / 'compact_tools.py')
 plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 
