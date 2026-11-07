@@ -32,6 +32,35 @@ class CompactTests(unittest.TestCase):
     def test_single_sparse(self):
         self.check(b'T5\n', b'T0\n')
 
+    def test_additional_reserved_commands(self):
+        self.check(b'T3\nT1001\nT65279\n', b'T0\nT1001\nT65279\n')
+        self.check(b'T1001\nT65279\n', b'T1001\nT65279\n')
+
+    def test_compact_parameters(self):
+        self.check(b'T3\nM104T3S200\nM109S210T3\nm900k0.1t3\n',
+                   b'T0\nM104T0S200\nM109S210T0\nm900k0.1t0\n')
+
+    def test_compact_parameter_boundaries(self):
+        self.check(b'T3\nM104 T30 S200\nM109 T3.5 S200\nM104 TARGET3 S200\n',
+                   b'T0\nM104 T30 S200\nM109 T3.5 S200\nM104 TARGET3 S200\n')
+
+    def test_conflicts_and_ams_rejected_without_writing(self):
+        sources = [b'T3\nM104 T0 S0\n', b'T3\nT5\nM109S200T1\n']
+        sources += [b'T3\n' + command + b'\n' for command in
+                    (b'M620S3', b'M621S3', b'm620s3', b'M620; comment', b'M621 S3')]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'slice.gcode.pp'
+            ctx = types.SimpleNamespace(step=1, gcode_path=str(path), output_name='export.gcode')
+            for source in sources:
+                with self.subTest(source=source):
+                    path.write_bytes(source)
+                    with self.assertRaises(ValueError):
+                        plugin.CompactTools().execute(ctx)
+                    self.assertEqual(path.read_bytes(), source)
+
+    def test_contiguous_tools_with_qualified_reference_noop(self):
+        self.check(b'T0\nM104T1S0\n', b'T0\nM104T1S0\n')
+
     def test_contiguous_noop(self):
         self.check(b'T1\nT0\n', b'T1\nT0\n')
 

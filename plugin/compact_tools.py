@@ -14,10 +14,10 @@ from pathlib import Path
 import orca
 
 # Values reserved by common Marlin/RRF/Bambu dialects are never filament slots.
-SPECIAL = {255, 1000, 1100, 65535}
+SPECIAL = {255, 1000, 1001, 1100, 65279, 65535}
 COMMAND = re.compile(r'^\s*(T-?\d+|M\d+(?:\.\d+)?|[A-Z_]+)(?=\s|[A-Z]|$)', re.I)
 TOOL = re.compile(r'T(\d+)\Z', re.I)
-PARAM = re.compile(r'(?<![A-Za-z0-9_])T(\d+)(?=\s|[A-Z]|$)', re.I)
+PARAM = re.compile(r'(?<![A-Za-z_])T(\d+)(?=\s|[A-Z]|$)', re.I)
 INITIAL = re.compile(r'(?<!\S)(?:TOOL|INITIAL_TOOL|INITIAL_EXTRUDER)=(\d+)(?=\s|$)', re.I)
 VIEWER_KEYS = {'filament_colour', 'extruder_colour', 'filament_type',
                'filament_diameter', 'filament_density', 'filament_cost',
@@ -52,10 +52,17 @@ def compact(data):
     mapping = {old: new for new, old in enumerate(used)}
     if all(old == new for old, new in mapping.items()):
         return data, mapping
+    # An unchanged reference to an unselected tool must not acquire the meaning
+    # of a selected tool after compaction (for example, M104 T0 S0 after T3).
+    targets = set(mapping.values())
+    for row in refs:
+        for _, _, value, selection in row:
+            if not selection and value not in mapping and value in targets:
+                raise ValueError(f'Unselected tool T{value} conflicts with compacted tool indices')
     # Numbered/checksummed streams require checksum regeneration; reject atomically.
     if any(re.match(r'\s*N\d+', line, re.I) or '*' in line.split(';', 1)[0] for line in lines):
         raise ValueError('Numbered/checksummed G-code is unsupported')
-    if any(re.match(r'\s*M62[01](?=\s|$)', line, re.I) for line in lines):
+    if any(re.match(r'\s*M62[01](?=\s|[A-Z;(]|$)', line, re.I) for line in lines):
         raise ValueError('Bambu AMS M620/M621 mapping is unsupported')
     output = []
     in_config = False
