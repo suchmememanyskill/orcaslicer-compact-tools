@@ -1,4 +1,5 @@
 import importlib.util
+import zipfile
 from pathlib import Path
 import sys
 import tempfile
@@ -22,6 +23,32 @@ class CompactTests(unittest.TestCase):
         result, _ = plugin.compact(source)
         self.assertEqual(result, expected)
         self.assertEqual(plugin.compact(result)[0], result)
+
+    def test_wheel_loads_packaged_plugin(self):
+        root = Path(__file__).resolve().parents[1]
+        build_spec = importlib.util.spec_from_file_location('build_plugin', root / 'build_plugin.py')
+        builder = importlib.util.module_from_spec(build_spec)
+        build_spec.loader.exec_module(builder)
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = builder.build(directory)
+            source = (root / 'plugin/compact_tools.py').read_text()
+            version = next(line.split('"')[1] for line in source.splitlines()
+                           if line.startswith('# version = '))
+            self.assertEqual(wheel.name, f'compact_tools-{version}-py3-none-any.whl')
+            with zipfile.ZipFile(wheel) as archive:
+                self.assertIsNone(archive.testzip())
+                metadata = archive.read(f'compact_tools-{version}.dist-info/METADATA').decode()
+                self.assertIn('Author: Sims\n', metadata)
+                self.assertIn(f'Version: {version}\n', metadata)
+                self.assertIn('Name: Compact-tools\n', metadata)
+                self.assertEqual(archive.read('compact_tools/__init__.py'),
+                                 (root / 'plugin/compact_tools.py').read_bytes())
+                archive.extractall(Path(directory) / 'extracted')
+            entry = Path(directory) / 'extracted/compact_tools/__init__.py'
+            spec = importlib.util.spec_from_file_location('packaged_compact_tools', entry)
+            packaged = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(packaged)
+            self.assertEqual(packaged.compact(b'T2\nT4\nT6\n')[0], b'T0\nT1\nT2\n')
 
     def test_sorted_order_repeats_and_motion(self):
         self.check(b'T7\nG1 X3 E5.7\nT3\nT5\nT7\n', b'T2\nG1 X3 E5.7\nT0\nT1\nT2\n')
