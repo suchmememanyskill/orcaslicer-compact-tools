@@ -4,7 +4,7 @@
 # name = "Compact G-code Tools"
 # description = "Compacts used tool indices in the outgoing G-code working copy."
 # author = "Sims"
-# version = "1.0.1"
+# version = "1.0.2"
 # type = "slicing-pipeline"
 # ///
 """Standalone post-processor; see README.md for its deliberately bounded dialect."""
@@ -25,10 +25,23 @@ VIEWER_KEYS = {'filament_colour', 'extruder_colour', 'filament_type',
 QUALIFIED = {'M104', 'M109', 'M200', 'M218', 'M221', 'M572', 'M900'}
 
 
+MASKED_TEXT = re.compile(r'"(?:\\.|[^"\\])*"|\([^)]*\)')
+VIEWER_TOOL = re.compile(r'(;VT)(\d+)(?=\s|$)')
+FILAMENT_HEADER = re.compile(r'(;\s*)(filament_density|filament_diameter|filament)(:\s*)([^\r\n]*)(.*)', re.S)
+FILAMENT_STATS = re.compile(r'(;\s*)(filament used \[(?:mm|cm3|g)\]|filament cost)(\s*=\s*)([^\r\n]*)(.*)', re.S)
+AMS_COMMAND = re.compile(r'\s*M62[01](?=\s|[A-Z;(]|$)', re.I)
+CONFIG_ENTRY = re.compile(r'(;\s*)(\w+)(\s*=\s*)([^\r\n]*)(.*)', re.S)
+NUMBERED_LINE = re.compile(r'\s*N\d+', re.I)
+
+
 def references(line):
     """Return exact numeric spans; strings and parenthetical comments are masked."""
+    # These prefixes cannot select a tool in the supported dialect.
+    if line.lstrip().startswith(('G', 'g', ';')):
+        return []
     code = line.split(';', 1)[0]
-    code = re.sub(r'"(?:\\.|[^"\\])*"|\([^)]*\)', lambda m: ' ' * len(m[0]), code)
+    if '"' in code or '(' in code:
+        code = MASKED_TEXT.sub(lambda m: ' ' * len(m[0]), code)
     match = COMMAND.match(code)
     if not match:
         return []
@@ -46,8 +59,9 @@ def references(line):
 def compact(data):
     # latin-1 is a byte-preserving transport, not an encoding conversion.
     lines = data.decode('latin-1').splitlines(keepends=True)
-    refs = [references(line) for line in lines]
-    used = sorted({value for row in refs for _, _, value, selection in row
+    refs = {index: row for index, line in enumerate(lines)
+            if (row := references(line))}
+    used = sorted({value for row in refs.values() for _, _, value, selection in row
                    if selection and value not in SPECIAL})
     mapping = {old: new for new, old in enumerate(used)}
     if all(old == new for old, new in mapping.items()):
@@ -55,18 +69,19 @@ def compact(data):
     # An unchanged reference to an unselected tool must not acquire the meaning
     # of a selected tool after compaction (for example, M104 T0 S0 after T3).
     targets = set(mapping.values())
-    for row in refs:
+    for row in refs.values():
         for _, _, value, selection in row:
             if not selection and value not in mapping and value in targets:
                 raise ValueError(f'Unselected tool T{value} conflicts with compacted tool indices')
     # Numbered/checksummed streams require checksum regeneration; reject atomically.
-    if any(re.match(r'\s*N\d+', line, re.I) or '*' in line.split(';', 1)[0] for line in lines):
+    if any(NUMBERED_LINE.match(line) or '*' in line.split(';', 1)[0] for line in lines):
         raise ValueError('Numbered/checksummed G-code is unsupported')
-    if any(re.match(r'\s*M62[01](?=\s|[A-Z;(]|$)', line, re.I) for line in lines):
+    if any(AMS_COMMAND.match(line) for line in lines):
         raise ValueError('Bambu AMS M620/M621 mapping is unsupported')
     output = []
     in_config = False
-    for line, row in zip(lines, refs):
+    for index, line in enumerate(lines):
+        row = refs.get(index, ())
         if line.strip() == '; CONFIG_BLOCK_START':
             in_config = True
             output.append(line.replace('CONFIG_BLOCK_START', 'ORIGINAL_CONFIG_BLOCK_START'))
@@ -76,7 +91,7 @@ def compact(data):
             output.append(line.replace('CONFIG_BLOCK_END', 'ORIGINAL_CONFIG_BLOCK_END'))
             continue
         if in_config:
-            match = re.match(r'(;\s*)(\w+)(\s*=\s*)([^\r\n]*)(.*)', line, re.S)
+            match = CONFIG_ENTRY.match(line)
             if match:
                 # The complete config is historical slice input, not remapped presets.
                 output.append('; original ' + line[2:])
@@ -87,11 +102,14 @@ def compact(data):
         for start, end, value, _ in reversed(row):
             if value in mapping:
                 line = line[:start] + str(mapping[value]) + line[end:]
-        vt = re.match(r'(;VT)(\d+)(?=\s|$)', line)
+        if not line.startswith(';'):
+            output.append(line)
+            continue
+        vt = VIEWER_TOOL.match(line)
         if vt and int(vt[2]) in mapping:
             line = line[:vt.start(2)] + str(mapping[int(vt[2])]) + line[vt.end(2):]
-        meta = re.match(r'(;\s*)(filament_density|filament_diameter|filament)(:\s*)([^\r\n]*)(.*)', line, re.S)
-        stats = re.match(r'(;\s*)(filament used \[(?:mm|cm3|g)\]|filament cost)(\s*=\s*)([^\r\n]*)(.*)', line, re.S)
+        meta = FILAMENT_HEADER.match(line)
+        stats = FILAMENT_STATS.match(line)
         match = meta or stats
         if match:
             if match[2] == 'filament':

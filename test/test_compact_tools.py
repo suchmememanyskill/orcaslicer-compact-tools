@@ -95,6 +95,31 @@ class CompactTests(unittest.TestCase):
         self.check(b'; T9\r\nM117 T8\r\nG28 T300\r\nM620.1 T220\r\nT255\r\nT1000\r\nT-1\r\nT65535\r\nT3 ; T5\r\n',
                    b'; T9\r\nM117 T8\r\nG28 T300\r\nM620.1 T220\r\nT255\r\nT1000\r\nT-1\r\nT65535\r\nT0 ; T5\r\n')
 
+    def test_masked_prefixes_and_tool_parameters(self):
+        self.check(b'(intro T9) T3\r\n"T8" T5\r\nM104 (T7) T3 S210\r\nM109 "T9" T5 S220\r\n',
+                   b'(intro T9) T0\r\n"T8" T1\r\nM104 (T7) T0 S210\r\nM109 "T9" T1 S220\r\n')
+
+    def test_tool_references_among_unmodified_lines(self):
+        self.check(b'G1 X2 E0.4\n; raw \xff\x00 T9\n\nT5\n  g1 X3 E0.5\nM104T5S200\n;VT5\nT3',
+                   b'G1 X2 E0.4\n; raw \xff\x00 T9\n\nT1\n  g1 X3 E0.5\nM104T1S200\n;VT1\nT0')
+
+    def test_motion_checksums_rejected_without_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'slice.gcode.pp'
+            ctx = types.SimpleNamespace(step=1, gcode_path=str(path), output_name='export.gcode')
+            for motion in (b'G1 X2*12', b'g1 X2*12', b'  G1 X2*12'):
+                source = b'T3\n' + motion + b'\n'
+                with self.subTest(motion=motion):
+                    path.write_bytes(source)
+                    with self.assertRaisesRegex(ValueError, 'Numbered/checksummed'):
+                        plugin.CompactTools().execute(ctx)
+                    self.assertEqual(path.read_bytes(), source)
+        self.check(b'T3\nG1 X2 ; *12 T9\n', b'T0\nG1 X2 ; *12 T9\n')
+
+    def test_indented_config_markers(self):
+        self.check(b'T3\r\n  ; CONFIG_BLOCK_START\r\n; filament_type = A;B;C;D\r\n  ; CONFIG_BLOCK_END\r\n; filament_density: 1,2,3,4\r\n',
+                   b'T0\r\n  ; ORIGINAL_CONFIG_BLOCK_START\r\n; original filament_type = A;B;C;D\r\n; filament_type = D\r\n  ; ORIGINAL_CONFIG_BLOCK_END\r\n; filament_density: 4\r\n')
+
     def test_initial_macro_and_qualified(self):
         self.check(b'PRINT_START TOOL=7 EXTRUDER=220 BED=60\nM109 S220 T7\nM104 T2 S0\nT3\nT7\n',
                    b'PRINT_START TOOL=1 EXTRUDER=220 BED=60\nM109 S220 T1\nM104 T2 S0\nT0\nT1\n')
